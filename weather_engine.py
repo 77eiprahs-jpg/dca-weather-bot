@@ -1,15 +1,21 @@
 import requests
-import pandas as pd
 from datetime import datetime
-import os
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 STATION = "KDCA"
 LAT = 38.8512
 LON = -77.0402
+SHEET_NAME = "DCA Weather Live Log"
 
-LIVE_FILE = "DCA_live_log.csv"
-MAX_FILE = "DCA_daily_max.csv"
-REVISION_FILE = "DCA_forecast_revisions.csv"
+scope = ["https://spreadsheets.google.com/feeds",
+         "https://www.googleapis.com/auth/drive"]
+
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    "credentials.json", scope)
+
+client = gspread.authorize(creds)
+sheet = client.open(SHEET_NAME).sheet1
 
 def nws_observation():
     url = f"https://api.weather.gov/stations/{STATION}/observations/latest"
@@ -25,64 +31,11 @@ def nws_forecast_high():
         if p["isDaytime"]:
             return p["temperature"]
 
-def update_daily_max(current_temp):
-    today = datetime.utcnow().date()
-
-    if os.path.exists(MAX_FILE):
-        df = pd.read_csv(MAX_FILE)
-        if str(today) in df["Date"].values:
-            existing = df.loc[df["Date"] == str(today), "Official_Max_F"].values[0]
-            if current_temp > existing:
-                df.loc[df["Date"] == str(today), "Official_Max_F"] = current_temp
-                df.to_csv(MAX_FILE, index=False)
-            return
-
-    new_row = pd.DataFrame([{
-        "Date": str(today),
-        "Official_Max_F": current_temp
-    }])
-
-    if os.path.exists(MAX_FILE):
-        new_row.to_csv(MAX_FILE, mode='a', header=False, index=False)
-    else:
-        new_row.to_csv(MAX_FILE, index=False)
-
-def detect_revision(current_forecast):
-    if os.path.exists(REVISION_FILE):
-        df = pd.read_csv(REVISION_FILE)
-        last_forecast = df.iloc[-1]["Forecast_High_F"]
-        if current_forecast != last_forecast:
-            pd.DataFrame([{
-                "Timestamp": datetime.utcnow(),
-                "Forecast_High_F": current_forecast
-            }]).to_csv(REVISION_FILE, mode='a', header=False, index=False)
-    else:
-        pd.DataFrame([{
-            "Timestamp": datetime.utcnow(),
-            "Forecast_High_F": current_forecast
-        }]).to_csv(REVISION_FILE, index=False)
-
 def collect():
-    timestamp = datetime.utcnow()
+    timestamp = str(datetime.utcnow())
     current_temp = nws_observation()
     forecast_high = nws_forecast_high()
-
-    pd.DataFrame([{
-        "Timestamp": timestamp,
-        "Observed_Temp_F": current_temp,
-        "Forecast_High_F": forecast_high
-    }]).to_csv(
-        LIVE_FILE,
-        mode='a',
-        header=not os.path.exists(LIVE_FILE),
-        index=False
-    )
-
-    if current_temp:
-        update_daily_max(current_temp)
-
-    if forecast_high:
-        detect_revision(forecast_high)
+    sheet.append_row([timestamp, current_temp, forecast_high])
 
 if __name__ == "__main__":
     collect()
